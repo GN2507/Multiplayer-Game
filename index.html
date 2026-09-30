@@ -1,0 +1,295 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Fake It 'Til You Make It</title>
+  <script src="/socket.io/socket.io.js"></script>
+  <style>
+    :root {
+      --bg-color: #0f172a;
+      --card-bg: #1e293b;
+      --accent-purple: #8b5cf6;
+      --accent-pink: #ec4899;
+      --text-main: #f8fafc;
+      --text-sub: #94a3b8;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; font-family: 'Segoe UI', system-ui, sans-serif; }
+    body { background-color: var(--bg-color); color: var(--text-main); display: flex; justify-content: center; min-height: 100vh; padding: 1rem; }
+    
+    .container { width: 100%; max-width: 480px; display: flex; flex-direction: column; gap: 1rem; }
+    header { text-align: center; margin-bottom: 0.5rem; }
+    h1 { font-size: 1.8rem; background: linear-gradient(135deg, var(--accent-purple), var(--accent-pink)); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+
+    .card { background: var(--card-bg); border-radius: 12px; padding: 1.25rem; box-shadow: 0 4px 12px rgba(0,0,0,0.3); display: flex; flex-direction: column; gap: 1rem; }
+    .hidden { display: none !important; }
+
+    input, textarea, button { width: 100%; padding: 0.8rem; border-radius: 8px; border: none; font-size: 1rem; }
+    input, textarea { background: #334155; color: #fff; }
+    button { background: var(--accent-purple); color: white; font-weight: bold; cursor: pointer; transition: background 0.2s; }
+    button:hover { background: #7c3aed; }
+    button:disabled { opacity: 0.5; cursor: not-allowed; }
+
+    .badge { display: inline-block; padding: 0.25rem 0.5rem; border-radius: 4px; font-size: 0.8rem; font-weight: bold; }
+    .badge-impostor { background: #ef4444; color: white; }
+    .badge-real { background: #10b981; color: white; }
+
+    .timer-bar { height: 6px; background: #334155; border-radius: 3px; overflow: hidden; }
+    .timer-fill { height: 100%; background: var(--accent-pink); width: 100%; transition: width 1s linear; }
+
+    .player-list { list-style: none; display: flex; flex-direction: column; gap: 0.5rem; }
+    .player-item { background: #334155; padding: 0.6rem 1rem; border-radius: 6px; display: flex; justify-content: space-between; }
+    
+    .submission-card { background: #334155; padding: 1rem; border-radius: 8px; margin-bottom: 0.5rem; }
+    .vote-btn { background: #475569; margin-top: 0.5rem; }
+    .vote-btn.selected { background: var(--accent-pink); }
+    .error { color: #ef4444; font-size: 0.9rem; text-align: center; }
+  </style>
+</head>
+<body>
+
+  <div class="container">
+    <header>
+      <h1>Fake It 'Til You Make It</h1>
+    </header>
+
+    <div id="error-msg" class="error hidden"></div>
+
+    <!-- VIEW 1: JOIN/CREATE -->
+    <div id="view-auth" class="card">
+      <h2>Welcome Player!</h2>
+      <input type="text" id="input-name" placeholder="Enter your display name" maxlength="12">
+      <hr style="border-color: #334155;">
+      <button id="btn-create">Create New Room</button>
+      <div style="text-align: center; color: var(--text-sub);">OR</div>
+      <input type="text" id="input-room-code" placeholder="4-Letter Room Code" style="text-transform: uppercase;">
+      <button id="btn-join">Join Room</button>
+    </div>
+
+    <!-- VIEW 2: LOBBY -->
+    <div id="view-lobby" class="card hidden">
+      <h2>Room Code: <span id="display-room-code" style="color: var(--accent-pink);"></span></h2>
+      <p style="color: var(--text-sub);">Waiting for players (2–8)...</p>
+      <ul id="lobby-player-list" class="player-list"></ul>
+      <button id="btn-start-game" class="hidden">Start Game</button>
+    </div>
+
+    <!-- VIEW 3: SUBMISSION PHASE -->
+    <div id="view-submit" class="card hidden">
+      <div style="display: flex; justify-content: space-between; align-items: center;">
+        <span>Round <span id="submit-round-num">1</span>/3</span>
+        <span id="role-badge" class="badge"></span>
+      </div>
+      <div class="timer-bar"><div id="timer-submit" class="timer-fill"></div></div>
+      <div id="prompt-box" style="background: #334155; padding: 1rem; border-radius: 8px; font-weight: 500;"></div>
+      <textarea id="input-answer" rows="3" placeholder="Type your response here..."></textarea>
+      <button id="btn-submit-answer">Submit Response</button>
+      <p id="submit-status" style="font-size: 0.85rem; color: var(--text-sub); text-align: center;"></p>
+    </div>
+
+    <!-- VIEW 4: VOTING PHASE -->
+    <div id="view-vote" class="card hidden">
+      <h2>Who is the Impostor?</h2>
+      <p style="color: var(--text-sub); font-size: 0.9rem;">Read the responses below and vote on who received the fake prompt!</p>
+      <div class="timer-bar"><div id="timer-vote" class="timer-fill"></div></div>
+      <div id="voting-list"></div>
+      <p id="vote-status" style="font-size: 0.85rem; color: var(--text-sub); text-align: center;"></p>
+    </div>
+
+    <!-- VIEW 5: ROUND RESULTS -->
+    <div id="view-results" class="card hidden">
+      <h2>Round Results</h2>
+      <p id="reveal-text" style="font-size: 1.1rem; text-align: center;"></p>
+      <ul id="results-score-list" class="player-list"></ul>
+      <button id="btn-next-round" class="hidden">Next Round</button>
+    </div>
+
+    <!-- VIEW 6: GAME OVER -->
+    <div id="view-gameover" class="card hidden">
+      <h2>🏆 Final Scores</h2>
+      <ul id="final-score-list" class="player-list"></ul>
+      <button onclick="window.location.reload()">Play Again</button>
+    </div>
+  </div>
+
+  <script>
+    const socket = io();
+    let currentRoomCode = null;
+    let myPlayerId = null;
+
+    function showView(viewId) {
+      ['view-auth', 'view-lobby', 'view-submit', 'view-vote', 'view-results', 'view-gameover'].forEach(id => {
+        document.getElementById(id).classList.add('hidden');
+      });
+      document.getElementById(viewId).classList.remove('hidden');
+    }
+
+    function showError(msg) {
+      const errEl = document.getElementById('error-msg');
+      errEl.textContent = msg;
+      errEl.classList.remove('hidden');
+      setTimeout(() => errEl.classList.add('hidden'), 4000);
+    }
+
+    document.getElementById('btn-create').onclick = () => {
+      const name = document.getElementById('input-name').value.trim();
+      if (!name) return showError('Please enter your name.');
+      socket.emit('create_room', { name });
+    };
+
+    document.getElementById('btn-join').onclick = () => {
+      const name = document.getElementById('input-name').value.trim();
+      const code = document.getElementById('input-room-code').value.trim();
+      if (!name || !code) return showError('Please enter both name and room code.');
+      socket.emit('join_room', { name, roomCode: code });
+    };
+
+    document.getElementById('btn-start-game').onclick = () => {
+      socket.emit('start_game', { roomCode: currentRoomCode });
+    };
+
+    document.getElementById('btn-submit-answer').onclick = () => {
+      const answer = document.getElementById('input-answer').value;
+      socket.emit('submit_answer', { roomCode: currentRoomCode, answer });
+      document.getElementById('btn-submit-answer').disabled = true;
+      document.getElementById('btn-submit-answer').textContent = 'Submitted!';
+    };
+
+    document.getElementById('btn-next-round').onclick = () => {
+      socket.emit('next_round', { roomCode: currentRoomCode });
+    };
+
+    socket.on('room_created', ({ roomCode, playerId }) => {
+      currentRoomCode = roomCode;
+      myPlayerId = playerId;
+      document.getElementById('display-room-code').textContent = roomCode;
+      showView('view-lobby');
+    });
+
+    socket.on('room_joined', ({ roomCode, playerId }) => {
+      currentRoomCode = roomCode;
+      myPlayerId = playerId;
+      document.getElementById('display-room-code').textContent = roomCode;
+      showView('view-lobby');
+    });
+
+    socket.on('room_update', (room) => {
+      const list = document.getElementById('lobby-player-list');
+      list.innerHTML = room.players.map(p => `
+        <li class="player-item">
+          <span>${p.name}</span>
+          ${p.id === room.hostId ? '<span style="color:var(--accent-pink); font-size:0.8rem;">HOST</span>' : ''}
+        </li>
+      `).join('');
+
+      const btnStart = document.getElementById('btn-start-game');
+      if (room.hostId === myPlayerId && room.players.length >= 2) {
+        btnStart.classList.remove('hidden');
+      } else {
+        btnStart.classList.add('hidden');
+      }
+    });
+
+    socket.on('round_start', ({ round, maxRounds, isImpostor, prompt }) => {
+      showView('view-submit');
+      document.getElementById('submit-round-num').textContent = round;
+      
+      const badge = document.getElementById('role-badge');
+      if (isImpostor) {
+        badge.textContent = "YOU ARE THE IMPOSTOR";
+        badge.className = "badge badge-impostor";
+      } else {
+        badge.textContent = "REAL PROMPT";
+        badge.className = "badge badge-real";
+      }
+
+      document.getElementById('prompt-box').textContent = prompt;
+      document.getElementById('input-answer').value = '';
+      document.getElementById('btn-submit-answer').disabled = false;
+      document.getElementById('btn-submit-answer').textContent = 'Submit Response';
+      document.getElementById('submit-status').textContent = '';
+    });
+
+    socket.on('timer_tick', ({ timeLeft }) => {
+      const activeTimer = document.querySelector('#view-submit:not(.hidden) .timer-fill, #view-vote:not(.hidden) .timer-fill');
+      if (activeTimer) {
+        const total = activeTimer.id === 'timer-submit' ? 45 : 30;
+        activeTimer.style.width = `${(timeLeft / total) * 100}%`;
+      }
+    });
+
+    socket.on('submission_status', ({ submittedCount, totalPlayers }) => {
+      document.getElementById('submit-status').textContent = `${submittedCount} / ${totalPlayers} players submitted`;
+    });
+
+    socket.on('voting_start', ({ submissions }) => {
+      showView('view-vote');
+      const list = document.getElementById('voting-list');
+      
+      list.innerHTML = submissions.map(sub => {
+        const isSelf = sub.playerId === myPlayerId;
+        return `
+          <div class="submission-card">
+            <p style="font-weight:600; color:var(--text-sub); font-size:0.85rem;">${sub.playerName}'s response:</p>
+            <p style="margin:0.4rem 0;">"${sub.text}"</p>
+            ${!isSelf ? `<button class="vote-btn" onclick="castVote('${sub.playerId}', this)">Vote as Impostor</button>` : '<em style="font-size:0.8rem; color:var(--text-sub);">(This is your submission)</em>'}
+          </div>
+        `;
+      }).join('');
+      document.getElementById('vote-status').textContent = '';
+    });
+
+    window.castVote = (targetId, btnEl) => {
+      document.querySelectorAll('.vote-btn').forEach(b => b.classList.remove('selected'));
+      btnEl.classList.add('selected');
+      socket.emit('submit_vote', { roomCode: currentRoomCode, targetId });
+    };
+
+    socket.on('vote_status', ({ votedCount, totalPlayers }) => {
+      document.getElementById('vote-status').textContent = `${votedCount} / ${totalPlayers} votes submitted`;
+    });
+
+    socket.on('round_results', ({ impostorName, results, round, maxRounds }) => {
+      showView('view-results');
+      
+      document.getElementById('reveal-text').innerHTML = `
+        The Impostor was <strong style="color:var(--accent-pink);">${impostorName}</strong>!
+      `;
+
+      const list = document.getElementById('results-score-list');
+      list.innerHTML = results.map(r => `
+        <li class="player-item">
+          <div>
+            <strong>${r.name}</strong> 
+            <span style="font-size:0.8rem; color:var(--text-sub);">(Voted for ${r.votedFor})</span>
+          </div>
+          <div>
+            <span style="color:#10b981; font-weight:bold;">+${r.pointsGained}</span>
+            <span style="margin-left:0.5rem; font-weight:bold;">${r.totalScore} pts</span>
+          </div>
+        </li>
+      `).join('');
+
+      const btnNext = document.getElementById('btn-next-round');
+      btnNext.classList.remove('hidden');
+      btnNext.textContent = round >= maxRounds ? "View Final Standings" : "Start Next Round";
+    });
+
+    socket.on('game_over', ({ players }) => {
+      showView('view-gameover');
+      const sorted = [...players].sort((a,b) => b.score - a.score);
+      const list = document.getElementById('final-score-list');
+      
+      list.innerHTML = sorted.map((p, index) => `
+        <li class="player-item">
+          <span>#${index + 1} <strong>${p.name}</strong></span>
+          <span style="color:var(--accent-pink); font-weight:bold;">${p.score} pts</span>
+        </li>
+      `).join('');
+    });
+
+    socket.on('error_message', (msg) => showError(msg));
+  </script>
+</body>
+</html>
